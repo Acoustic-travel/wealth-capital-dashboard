@@ -1,11 +1,18 @@
 
+
+# """
+# Wealth Capital — Live Stock Dashboard (Streamlit)
+# Live Google Sheet data, search/sort/filter, click a symbol to open its
+# live chart on GoCharting. Shows whatever columns each tab actually has
+# (so Rpt1/Rpt2/Rpt3 can differ — e.g. Rpt3's extra Buy/Sell/SL columns).
+# """
+
 # import os
 # from datetime import datetime
 
 # import pandas as pd
 # import streamlit as st
 # import gspread
-# import plotly.graph_objects as go
 # from google.oauth2.service_account import Credentials
 
 # try:
@@ -21,11 +28,11 @@
 # SHEETS = {"RPT 1": "rpt1", "RPT 2": "rpt2", "RPT 3": "rpt3"}
 # SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
-# SHOW_COLS = ["Symbol", "Date", "LTP", "Open", "High", "Low",
-#              "Prev Close", "% Price", "High 52", "20SMA", "Range", "Range %"]
+# # Columns we add ourselves for calculations — never shown in the table
+# INTERNAL_COLS = {"_pct", "Signal"}
 
 # if HAS_AUTOREFRESH:
-#     st_autorefresh(interval=30_000, key="wc_autorefresh")
+#     st_autorefresh(interval=60_000, key="wc_autorefresh")
 
 
 # # ── Google Sheets access ─────────────────────────────────────────────────
@@ -44,22 +51,40 @@
 #     return gspread.authorize(creds)
 
 
-# @st.cache_data(ttl=30, show_spinner="Fetching live data...")
+# @st.cache_resource(show_spinner=False)
+# def get_worksheets():
+#     """Open the spreadsheet and list its worksheets ONCE per app lifetime.
+#     This is the expensive part (2 API calls) — caching it here means normal
+#     refreshes only cost 1 API call per tab (get_all_values), not 4+."""
+#     client = get_client()
+#     sh = client.open_by_key(SPREADSHEET_ID)
+#     return sh.worksheets()
+
+
+# @st.cache_data(ttl=60, show_spinner="Fetching live data...")
 # def fetch_sheet(sheet_name: str) -> pd.DataFrame:
 #     try:
-#         client = get_client()
-#         sh = client.open_by_key(SPREADSHEET_ID)
-#         try:
-#             ws = sh.worksheet(sheet_name)
-#         except gspread.exceptions.WorksheetNotFound:
-#             ws = sh.get_worksheet(list(SHEETS.values()).index(sheet_name))
+#         worksheets = get_worksheets()
+#         idx = list(SHEETS.values()).index(sheet_name)
+#         ws = worksheets[idx]  # fetch by position — matches Rpt1/Rpt2/Rpt3 regardless of exact name/case
 
 #         values = ws.get_all_values()
 #         if not values:
 #             return pd.DataFrame()
 #         headers, rows = values[0], values[1:]
+#         headers = [h.strip() for h in headers]
 #         rows = [r + [""] * (len(headers) - len(r)) for r in rows]
 #         return pd.DataFrame(rows, columns=headers)
+#     except gspread.exceptions.APIError as e:
+#         if "429" in str(e) or "Quota exceeded" in str(e):
+#             st.error(
+#                 "Google Sheets API rate limit hit (too many reads per minute). "
+#                 "This clears itself within a minute — try Refresh again shortly. "
+#                 "If it keeps happening, close extra open tabs of this app, since each one polls independently."
+#             )
+#         else:
+#             st.error(f"Error fetching '{sheet_name}': {e}")
+#         return pd.DataFrame()
 #     except Exception as e:
 #         st.error(f"Error fetching '{sheet_name}': {e}")
 #         return pd.DataFrame()
@@ -74,43 +99,17 @@
 
 
 # def get_signal(row) -> str:
-#     r = to_float(row.get("Range %", 0))
+#     """BUY when Range % is between -1 and +1. If Range % can't be read
+#     (e.g. the sheet's own formula returned #N/A), show HOLD rather than
+#     silently guessing BUY."""
+#     r = to_float(row.get("Range %"), default=None)
+#     if r is None:
+#         return "HOLD"
 #     return "BUY" if -1 <= r <= 1 else "HOLD"
 
 
-# def show_candlestick_dialog(row: pd.Series, key_suffix: str):
-#     @st.dialog("Stock Chart")
-#     def _dialog():
-#         symbol = row.get("Symbol", "-")
-#         st.subheader(symbol)
-
-#         o, h, l, c, pc = (to_float(row.get("Open")), to_float(row.get("High")),
-#                            to_float(row.get("Low")), to_float(row.get("LTP")),
-#                            to_float(row.get("Prev Close")))
-
-#         fig = go.Figure(go.Candlestick(
-#             x=[row.get("Date", "-")], open=[o], high=[h], low=[l], close=[c],
-#             increasing_line_color="#10b981", decreasing_line_color="#ef4444",
-#         ))
-#         if pc:
-#             fig.add_hline(y=pc, line_dash="dot", line_color="#6b7280", annotation_text="Prev Close")
-#         fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10),
-#                            xaxis_rangeslider_visible=False, showlegend=False)
-#         st.plotly_chart(fig, use_container_width=True, key=f"candle_{key_suffix}")
-
-#         c1, c2 = st.columns(2)
-#         c1.write(f"**LTP:** {row.get('LTP','-')}  \n**Open:** {row.get('Open','-')}  \n"
-#                  f"**High:** {row.get('High','-')}  \n**Low:** {row.get('Low','-')}")
-#         c2.write(f"**Prev Close:** {row.get('Prev Close','-')}  \n**% Change:** {row.get('% Price','-')}  \n"
-#                  f"**20SMA:** {row.get('20SMA','-')}  \n**Range %:** {row.get('Range %','-')}")
-
-#         signal = get_signal(row)
-#         st.markdown(f"**Signal:** {'🟢 BUY' if signal == 'BUY' else '⚪ HOLD'}")
-
-#         if row.get("URL"):
-#             st.link_button("🔗 External Chart", row["URL"], key=f"link_{key_suffix}")
-
-#     _dialog()
+# def chart_url(symbol: str) -> str:
+#     return f"https://gocharting.com/terminal?ticker=NSE:{symbol}"
 
 
 # # ── Per-tab dashboard ─────────────────────────────────────────────────────
@@ -137,38 +136,60 @@
 #                                   key=f"range_{sheet_key}", label_visibility="collapsed")
 
 #     view = df.copy()
-#     if search:
+#     if search and "Symbol" in view.columns:
 #         view = view[view["Symbol"].astype(str).str.lower().str.contains(search.lower(), na=False)]
-#     if range_choice != "All Range %":
+#     if range_choice != "All Range %" and "Range %" in view.columns:
 #         limit = float(range_choice.split("to")[0].replace("+", "").replace("-", "").strip())
 #         view = view[view["Range %"].apply(to_float).between(-limit, limit)]
-#     if sort_choice == "Symbol (A-Z)":
+#     if sort_choice == "Symbol (A-Z)" and "Symbol" in view.columns:
 #         view = view.sort_values("Symbol")
-#     elif sort_choice == "LTP (High→Low)":
+#     elif sort_choice == "LTP (High→Low)" and "LTP" in view.columns:
 #         view = view.sort_values("LTP", key=lambda s: s.apply(to_float), ascending=False)
-#     elif sort_choice == "LTP (Low→High)":
+#     elif sort_choice == "LTP (Low→High)" and "LTP" in view.columns:
 #         view = view.sort_values("LTP", key=lambda s: s.apply(to_float), ascending=True)
 
 #     view = view.reset_index(drop=True)
-#     cols = [c for c in SHOW_COLS if c in view.columns]
-#     table_df = view[cols + ["Signal"]].copy()
-#     table_df["Signal"] = table_df["Signal"].map({"BUY": "🟢 BUY", "HOLD": "⚪ HOLD"})
 
-#     st.caption("Click a row to see its candlestick chart")
-#     event = st.dataframe(
-#         table_df, use_container_width=True, hide_index=True,
-#         on_select="rerun", selection_mode="single-row", key=f"table_{sheet_key}",
+#     # Show every real column from the sheet, in the sheet's own order — this
+#     # is what makes Rpt1/Rpt2/Rpt3 each display their own actual columns
+#     # (Prev. High Date, url, Buy, Sell, SL, PDate vs Date, etc.) automatically.
+#     sheet_cols = [c for c in df.columns if c not in INTERNAL_COLS]
+#     table_df = view[sheet_cols].copy()
+#     table_df["Signal"] = view["Signal"].map({"BUY": "🟢 BUY", "HOLD": "⚪ HOLD"})
+
+#     # Prefer the sheet's own pre-built url column for the Symbol link if present,
+#     # otherwise construct it from the symbol name.
+#     url_col = next((c for c in sheet_cols if c.lower() == "url"), None)
+#     if url_col and "Symbol" in table_df.columns:
+#         sheet_urls = view[url_col].astype(str)
+#         fallback_urls = view["Symbol"].apply(chart_url)
+#         table_df["Symbol"] = sheet_urls.where(sheet_urls.str.startswith("http"), fallback_urls)
+#     elif "Symbol" in table_df.columns:
+#         table_df["Symbol"] = view["Symbol"].apply(chart_url)
+
+#     # Cosmetic only: tidy up the sheet's own error strings for display
+#     table_df = table_df.replace({"#N/A": "–", "#REF!": "–", "#DIV/0!": "–"})
+
+#     column_config = {}
+#     if "Symbol" in table_df.columns:
+#         column_config["Symbol"] = st.column_config.LinkColumn("Symbol", display_text=r"ticker=NSE:(.*)")
+#     if url_col:
+#         column_config[url_col] = st.column_config.LinkColumn(url_col, display_text=r"ticker=NSE:(.*)")
+
+#     st.caption("Click a symbol to open its live chart on GoCharting")
+#     st.dataframe(
+#         table_df,
+#         use_container_width=True,
+#         hide_index=True,
+#         key=f"table_{sheet_key}",
+#         column_config=column_config,
 #     )
-
-#     if event and event.selection and event.selection.get("rows"):
-#         idx = event.selection["rows"][0]
-#         show_candlestick_dialog(view.iloc[idx], key_suffix=f"{sheet_key}_{idx}")
 
 
 # # ── Header ────────────────────────────────────────────────────────────────
 # h1, h2 = st.columns([3, 1])
 # with h1:
-#     st.title(" Wealth Capital")
+#     st.title("📈 Wealth Capital")
 #     st.caption("Trading · Investment · Growth")
 # with h2:
 #     st.write("")
@@ -183,17 +204,20 @@
 #     with tab:
 #         render_dashboard(SHEETS[label])
 
-# st.caption(f"© {datetime.now().year} Wealth Capital. All rights reserved.")
-
-
+# st.markdown(
+#     f"<p style='text-align:center;color:gray;font-size:0.85rem;margin-top:1rem;'>"
+#     f"© {datetime.now().year} Wealth Capital. All rights reserved.</p>",
+#     unsafe_allow_html=True,
+# )
 
 
 
 
 """
 Wealth Capital — Live Stock Dashboard (Streamlit)
-Simple, fast version: live Google Sheet data, search/sort/filter,
-click a symbol to open its live chart on GoCharting.
+Live Google Sheet data, search/sort/filter, click a symbol to open its
+live chart on GoCharting. Shows whatever columns each tab actually has
+(so Rpt1/Rpt2/Rpt3 can differ — e.g. Rpt3's extra Buy/Sell/SL columns).
 """
 
 import os
@@ -217,11 +241,11 @@ SPREADSHEET_ID = "15GG0E-pr6k-uA4DlT0TPys5scwcTgzJfRM8PcKczzqo"
 SHEETS = {"RPT 1": "rpt1", "RPT 2": "rpt2", "RPT 3": "rpt3"}
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
-SHOW_COLS = ["Symbol", "Date", "LTP", "Open", "High", "Low",
-             "Prev Close", "% Price", "High 52", "20SMA", "Range", "Range %"]
+# Columns we add ourselves for calculations — never shown in the table
+INTERNAL_COLS = {"_pct", "Signal"}
 
 if HAS_AUTOREFRESH:
-    st_autorefresh(interval=30_000, key="wc_autorefresh")
+    st_autorefresh(interval=60_000, key="wc_autorefresh")
 
 
 # ── Google Sheets access ─────────────────────────────────────────────────
@@ -240,22 +264,40 @@ def get_client():
     return gspread.authorize(creds)
 
 
-@st.cache_data(ttl=30, show_spinner="Fetching live data...")
+@st.cache_resource(show_spinner=False)
+def get_worksheets():
+    """Open the spreadsheet and list its worksheets ONCE per app lifetime.
+    This is the expensive part (2 API calls) — caching it here means normal
+    refreshes only cost 1 API call per tab (get_all_values), not 4+."""
+    client = get_client()
+    sh = client.open_by_key(SPREADSHEET_ID)
+    return sh.worksheets()
+
+
+@st.cache_data(ttl=60, show_spinner="Fetching live data...")
 def fetch_sheet(sheet_name: str) -> pd.DataFrame:
     try:
-        client = get_client()
-        sh = client.open_by_key(SPREADSHEET_ID)
-        try:
-            ws = sh.worksheet(sheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            ws = sh.get_worksheet(list(SHEETS.values()).index(sheet_name))
+        worksheets = get_worksheets()
+        idx = list(SHEETS.values()).index(sheet_name)
+        ws = worksheets[idx]  # fetch by position — matches Rpt1/Rpt2/Rpt3 regardless of exact name/case
 
         values = ws.get_all_values()
         if not values:
             return pd.DataFrame()
         headers, rows = values[0], values[1:]
+        headers = [h.strip() for h in headers]
         rows = [r + [""] * (len(headers) - len(r)) for r in rows]
         return pd.DataFrame(rows, columns=headers)
+    except gspread.exceptions.APIError as e:
+        if "429" in str(e) or "Quota exceeded" in str(e):
+            st.error(
+                "Google Sheets API rate limit hit (too many reads per minute). "
+                "This clears itself within a minute — try Refresh again shortly. "
+                "If it keeps happening, close extra open tabs of this app, since each one polls independently."
+            )
+        else:
+            st.error(f"Error fetching '{sheet_name}': {e}")
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"Error fetching '{sheet_name}': {e}")
         return pd.DataFrame()
@@ -270,7 +312,12 @@ def to_float(val, default=0.0):
 
 
 def get_signal(row) -> str:
-    r = to_float(row.get("Range %", 0))
+    """BUY when Range % is between -1 and +1. If Range % can't be read
+    (e.g. the sheet's own formula returned #N/A), show HOLD rather than
+    silently guessing BUY."""
+    r = to_float(row.get("Range %"), default=None)
+    if r is None:
+        return "HOLD"
     return "BUY" if -1 <= r <= 1 else "HOLD"
 
 
@@ -302,23 +349,45 @@ def render_dashboard(sheet_key: str):
                                   key=f"range_{sheet_key}", label_visibility="collapsed")
 
     view = df.copy()
-    if search:
+    if search and "Symbol" in view.columns:
         view = view[view["Symbol"].astype(str).str.lower().str.contains(search.lower(), na=False)]
-    if range_choice != "All Range %":
+    if range_choice != "All Range %" and "Range %" in view.columns:
         limit = float(range_choice.split("to")[0].replace("+", "").replace("-", "").strip())
         view = view[view["Range %"].apply(to_float).between(-limit, limit)]
-    if sort_choice == "Symbol (A-Z)":
+    if sort_choice == "Symbol (A-Z)" and "Symbol" in view.columns:
         view = view.sort_values("Symbol")
-    elif sort_choice == "LTP (High→Low)":
+    elif sort_choice == "LTP (High→Low)" and "LTP" in view.columns:
         view = view.sort_values("LTP", key=lambda s: s.apply(to_float), ascending=False)
-    elif sort_choice == "LTP (Low→High)":
+    elif sort_choice == "LTP (Low→High)" and "LTP" in view.columns:
         view = view.sort_values("LTP", key=lambda s: s.apply(to_float), ascending=True)
 
     view = view.reset_index(drop=True)
-    cols = [c for c in SHOW_COLS if c in view.columns]
-    table_df = view[cols + ["Signal"]].copy()
-    table_df["Signal"] = table_df["Signal"].map({"BUY": "🟢 BUY", "HOLD": "⚪ HOLD"})
-    table_df["Symbol"] = view["Symbol"].apply(chart_url)
+
+    # Show every real column from the sheet, in the sheet's own order — this
+    # is what makes Rpt1/Rpt2/Rpt3 each display their own actual columns
+    # (Prev. High Date, Buy, Sell, SL, PDate vs Date, etc.) automatically.
+    # The raw 'url' column itself is hidden — it's only used internally to
+    # power the clickable Symbol link below.
+    url_col = next((c for c in df.columns if c.lower() == "url"), None)
+    sheet_cols = [c for c in df.columns if c not in INTERNAL_COLS and c != url_col]
+    table_df = view[sheet_cols].copy()
+    table_df["Signal"] = view["Signal"].map({"BUY": "🟢 BUY", "HOLD": "⚪ HOLD"})
+
+    # Prefer the sheet's own pre-built url column for the Symbol link if present,
+    # otherwise construct it from the symbol name.
+    if url_col and "Symbol" in table_df.columns:
+        sheet_urls = view[url_col].astype(str)
+        fallback_urls = view["Symbol"].apply(chart_url)
+        table_df["Symbol"] = sheet_urls.where(sheet_urls.str.startswith("http"), fallback_urls)
+    elif "Symbol" in table_df.columns:
+        table_df["Symbol"] = view["Symbol"].apply(chart_url)
+
+    # Cosmetic only: tidy up the sheet's own error strings for display
+    table_df = table_df.replace({"#N/A": "–", "#REF!": "–", "#DIV/0!": "–"})
+
+    column_config = {}
+    if "Symbol" in table_df.columns:
+        column_config["Symbol"] = st.column_config.LinkColumn("Symbol", display_text=r"ticker=NSE:(.*)")
 
     st.caption("Click a symbol to open its live chart on GoCharting")
     st.dataframe(
@@ -326,18 +395,14 @@ def render_dashboard(sheet_key: str):
         use_container_width=True,
         hide_index=True,
         key=f"table_{sheet_key}",
-        column_config={
-            "Symbol": st.column_config.LinkColumn(
-                "Symbol", display_text=r"ticker=NSE:(.*)"
-            )
-        },
+        column_config=column_config,
     )
 
 
 # ── Header ────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([3, 1])
 with h1:
-    st.title(" Wealth Capital")
+    st.title("📈 Wealth Capital")
     st.caption("Trading · Investment · Growth")
 with h2:
     st.write("")
