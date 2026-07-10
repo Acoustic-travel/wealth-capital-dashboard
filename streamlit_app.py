@@ -23,7 +23,7 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 # ── Config ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Wealth Capital - Live Dashboard", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Wealth Capital - Live Dashboard", page_icon=" ", layout="wide")
 
 SPREADSHEET_ID = "15GG0E-pr6k-uA4DlT0TPys5scwcTgzJfRM8PcKczzqo"
 SHEETS = {"RPT 1": "rpt1", "RPT 2": "rpt2", "RPT 3": "rpt3"}
