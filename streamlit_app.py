@@ -402,7 +402,7 @@ def render_dashboard(sheet_key: str):
 # ── Header ────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([3, 1])
 with h1:
-    st.title("📈 Wealth Capital")
+    st.title(" Wealth Capital")
     st.caption("Trading · Investment · Growth")
 with h2:
     st.write("")
