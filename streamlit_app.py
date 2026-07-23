@@ -1,12 +1,4 @@
 
-
-"""
-Wealth Capital — Live Stock Dashboard (Streamlit)
-Live Google Sheet data, search/sort/filter, click a symbol to open its
-live chart on GoCharting. Shows whatever columns each tab actually has
-(so Rpt1/Rpt2/Rpt3 can differ — e.g. Rpt3's extra Buy/Sell/SL columns).
-"""
-
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -22,7 +14,7 @@ try:
 except ImportError:
     HAS_AUTOREFRESH = False
 
-# ── Config ────────────────────────────────────────────────────────────────
+
 st.set_page_config(page_title="Wealth Capital - Live Dashboard", page_icon=" ", layout="wide")
 
 SPREADSHEET_ID = "15GG0E-pr6k-uA4DlT0TPys5scwcTgzJfRM8PcKczzqo"
@@ -31,13 +23,13 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 IST = ZoneInfo("Asia/Kolkata")
 
 # Columns we add ourselves for calculations — never shown in the table
-INTERNAL_COLS = {"_pct", "Signal"}
+INTERNAL_COLS = {"_pct"}
 
 if HAS_AUTOREFRESH:
     st_autorefresh(interval=60_000, key="wc_autorefresh")
 
 
-# ── Google Sheets access ─────────────────────────────────────────────────
+
 @st.cache_resource(show_spinner=False)
 def get_client():
     """Streamlit secrets first (Cloud), local credentials.json as fallback (dev only)."""
@@ -92,7 +84,7 @@ def fetch_sheet(sheet_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────
+
 def to_float(val, default=0.0):
     try:
         return float(str(val).replace(",", "").replace("%", "").strip())
@@ -100,21 +92,20 @@ def to_float(val, default=0.0):
         return default
 
 
-def get_signal(row) -> str:
-    """BUY when Range % is between -1 and +1. If Range % can't be read
-    (e.g. the sheet's own formula returned #N/A), show HOLD rather than
-    silently guessing BUY."""
-    r = to_float(row.get("Range %"), default=None)
-    if r is None:
-        return "HOLD"
-    return "BUY" if -1 <= r <= 1 else "HOLD"
+# def get_signal(row) -> str:
+#     """BUY when Range % is between -1 and +1. If Range % can't be read
+#     (e.g. the sheet's own formula returned #N/A), show HOLD rather than
+#     silently guessing BUY."""
+#     r = to_float(row.get("Range %"), default=None)
+#     if r is None:
+#         return "HOLD"
+#     return "BUY" if -1 <= r <= 1 else "HOLD"
 
 
 def chart_url(symbol: str) -> str:
     return f"https://gocharting.com/terminal?ticker=NSE:{symbol}"
 
 
-# ── Per-tab dashboard ─────────────────────────────────────────────────────
 def render_dashboard(sheet_key: str):
     df = fetch_sheet(sheet_key)
     if df.empty:
@@ -122,13 +113,13 @@ def render_dashboard(sheet_key: str):
         return
 
     df["_pct"] = df["% Price"].apply(to_float) if "% Price" in df.columns else 0.0
-    df["Signal"] = df.apply(get_signal, axis=1)
-
-    c1, c2, c3, c4 = st.columns(4)
+    
+    c1, c2 = st.columns(2)
     c1.metric("Total Symbols", len(df))
-    c2.metric("Average Change", f"{round(df['_pct'].mean(), 2) if len(df) else 0}%")
-    c3.metric("Buy", int((df["Signal"] == "BUY").sum()))
-    c4.metric("Hold", int((df["Signal"] == "HOLD").sum()))
+    c2.metric(
+        "Average Change",
+        f"{round(df['_pct'].mean(), 2) if len(df) else 0}%"
+    )
 
     fc1, fc2, fc3 = st.columns([2, 1, 1])
     search = fc1.text_input("Search", key=f"search_{sheet_key}", placeholder="Search symbol...", label_visibility="collapsed")
@@ -160,7 +151,7 @@ def render_dashboard(sheet_key: str):
     url_col = next((c for c in df.columns if c.lower() == "url"), None)
     sheet_cols = [c for c in df.columns if c not in INTERNAL_COLS and c != url_col]
     table_df = view[sheet_cols].copy()
-    table_df["Signal"] = view["Signal"].map({"BUY": "🟢 BUY", "HOLD": "⚪ HOLD"})
+    # table_df["Signal"] = view["Signal"].map({"BUY": "🟢 BUY", "HOLD": "⚪ HOLD"})
 
     # Prefer the sheet's own pre-built url column for the Symbol link if present,
     # otherwise construct it from the symbol name.
@@ -188,7 +179,7 @@ def render_dashboard(sheet_key: str):
     )
 
 
-# ── Header ────────────────────────────────────────────────────────────────
+
 h1, h2 = st.columns([3, 1])
 with h1:
     st.title(" Wealth Capital")
@@ -200,7 +191,7 @@ with h2:
         fetch_sheet.clear()
         st.rerun()
 
-# ── Tabs ──────────────────────────────────────────────────────────────────
+
 tabs = st.tabs(list(SHEETS.keys()))
 for label, tab in zip(SHEETS.keys(), tabs):
     with tab:
